@@ -5,3 +5,4 @@ seaborn
 psycopg2-binary
 sqlalchemy
 jupyter
+ipykernel
