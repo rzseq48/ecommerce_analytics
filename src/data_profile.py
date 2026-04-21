@@ -98,6 +98,21 @@ def likely_columns(df: pd.DataFrame) -> dict[str, list[str]]:
     }
 
 
+def maybe_date_columns(df: pd.DataFrame, threshold: float = 0.8) -> list[str]:
+    """Find object columns that mostly parse as datetimes."""
+    candidates: list[str] = []
+    for column in df.select_dtypes(include=["object"]).columns:
+        sample = df[column].dropna().head(200)
+        if sample.empty:
+            continue
+
+        parsed = pd.to_datetime(sample, errors="coerce")
+        if parsed.notna().mean() >= threshold:
+            candidates.append(column)
+
+    return candidates
+
+
 def display_path(path: Path) -> str:
     """Show project-relative paths when possible."""
     try:
@@ -121,15 +136,48 @@ def dataframe_to_markdown(df: pd.DataFrame) -> str:
     return "\n".join(table)
 
 
+def numeric_summary(df: pd.DataFrame) -> pd.DataFrame:
+    """Return compact descriptive stats for numeric columns."""
+    numeric_df = df.select_dtypes(include="number")
+    if numeric_df.empty:
+        return pd.DataFrame()
+
+    described = numeric_df.describe().T.reset_index().rename(columns={"index": "column"})
+    selected = described[["column", "mean", "std", "min", "25%", "50%", "75%", "max"]].copy()
+    selected.insert(1, "negative_values", [int((df[column] < 0).sum()) for column in selected["column"]])
+    return selected.round(2).sort_values("std", ascending=False)
+
+
+def top_categories_summary(df: pd.DataFrame, max_categories: int = 5) -> dict[str, pd.DataFrame]:
+    """Return the most common values for low-cardinality categorical columns."""
+    summaries: dict[str, pd.DataFrame] = {}
+    for column in df.select_dtypes(include=["object", "category"]).columns:
+        unique_count = df[column].nunique(dropna=True)
+        if 1 < unique_count <= 20:
+            counts = (
+                df[column]
+                .fillna("<<missing>>")
+                .value_counts()
+                .head(max_categories)
+                .rename_axis("value")
+                .reset_index(name="count")
+            )
+            summaries[column] = counts
+    return summaries
+
+
 def render_report(dataset_path: Path, df: pd.DataFrame, summary: pd.DataFrame) -> str:
     """Render the profile as Markdown."""
     roles = likely_columns(df)
+    parsed_date_candidates = maybe_date_columns(df)
     duplicate_rows = int(df.duplicated().sum())
     total_cells = int(df.shape[0] * df.shape[1])
     missing_cells = int(df.isna().sum().sum())
     missing_pct = round((missing_cells / total_cells * 100) if total_cells else 0, 2)
 
     top_missing = summary.head(10)[["column", "dtype", "missing", "missing_pct", "unique_values"]]
+    numeric_stats = numeric_summary(df).head(10)
+    top_categories = top_categories_summary(df)
 
     lines = [
         "# Ecommerce Data Profile",
@@ -151,6 +199,9 @@ def render_report(dataset_path: Path, df: pd.DataFrame, summary: pd.DataFrame) -
         rendered = ", ".join(f"`{col}`" for col in columns) if columns else "_None detected_"
         lines.append(f"- {role}: {rendered}")
 
+    rendered_dates = ", ".join(f"`{col}`" for col in parsed_date_candidates) if parsed_date_candidates else "_None detected_"
+    lines.append(f"- parseable_dates: {rendered_dates}")
+
     lines.extend(
         [
             "",
@@ -158,6 +209,35 @@ def render_report(dataset_path: Path, df: pd.DataFrame, summary: pd.DataFrame) -
             "",
             dataframe_to_markdown(top_missing),
             "",
+            "## Numeric Snapshot",
+            "",
+            dataframe_to_markdown(numeric_stats),
+            "",
+            "## Top Category Values",
+            "",
+        ]
+    )
+
+    if top_categories:
+        for column, category_df in top_categories.items():
+            lines.extend(
+                [
+                    f"### `{column}`",
+                    "",
+                    dataframe_to_markdown(category_df),
+                    "",
+                ]
+            )
+    else:
+        lines.extend(
+            [
+                "_No low-cardinality categorical columns detected_",
+                "",
+            ]
+        )
+
+    lines.extend(
+        [
             "## Suggested Next EDA Questions",
             "",
             "- What columns identify orders, customers, products, and dates?",
