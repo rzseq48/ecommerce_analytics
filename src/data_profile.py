@@ -1,9 +1,3 @@
-"""Create a quick data quality profile for ecommerce datasets.
-
-This script is meant to be run before notebook-based EDA. It finds a CSV or
-Parquet dataset, summarizes schema, missing values, duplicates, and likely
-date/category/numeric fields, then writes a Markdown report to outputs/reports.
-"""
 
 from __future__ import annotations
 
